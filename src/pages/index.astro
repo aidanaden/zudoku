@@ -1,0 +1,209 @@
+---
+import "../global.css";
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="generator" content={Astro.generator} />
+    <title>zudoku zolver</title>
+  </head>
+  <body>
+    <div class="m-auto flex min-h-screen max-w-2xl items-center justify-center">
+      <canvas
+        id="board"
+        class="w-full font-mono text-base"
+        style={{ "image-rendering": "high-quality" }}
+      >
+      </canvas>
+    </div>
+  </body>
+</html>
+<script>
+  var memory = new WebAssembly.Memory({
+    // See build.zig for reasoning
+    initial: 2 /* pages */,
+    maximum: 2 /* pages */,
+  });
+
+  var importObject: WebAssembly.Imports = {
+    env: {
+      consoleLog: (arg: any) => console.log(arg), // Useful for debugging on zig's side
+      memory: memory,
+    },
+  };
+
+  // @see https://stackoverflow.com/questions/1527803/generating-random-whole-numbers-in-javascript-in-a-specific-range
+  function getInclusiveRandBetween(min: number, max: number): number {
+    return Math.floor(Math.random() * (max - min + 1) + min);
+  }
+
+  // @see https://stackoverflow.com/questions/62682136/how-to-draw-a-grid-onto-the-canvas
+  const drawGrid = (
+    id: string,
+    opts: {
+      width: number;
+      height: number;
+      cols: number;
+      rows: number;
+      weight: number;
+      values: number[];
+    },
+  ) => {
+    const canvas: HTMLCanvasElement = document.getElementById(
+      id,
+    ) as HTMLCanvasElement;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      console.error("no context found: ", ctx);
+      return;
+    }
+
+    // scale sharpness/ppi of fonts @see https://stackoverflow.com/questions/15661339/how-do-i-fix-blurry-text-in-my-html5-canvas
+    const ratio = window.devicePixelRatio;
+    canvas.width = opts.width * ratio;
+    canvas.height = opts.height * ratio;
+    ctx.scale(ratio, ratio);
+
+    let weightHalf = opts.weight / 2;
+    let availWidth = opts.width - opts.weight;
+    let availHeight = opts.height - opts.weight;
+    let cellWidth = availWidth / opts.cols;
+    let cellHeight = availHeight / opts.rows;
+
+    // set bg color
+    ctx.fillStyle = "transparent";
+    ctx.fillRect(0, 0, opts.width, opts.height);
+
+    // begin drawing grid borders
+    ctx.beginPath();
+    ctx.strokeStyle = "#DDD";
+    ctx.lineWidth = opts.weight;
+
+    for (let col = 0; col <= opts.cols; col++) {
+      let newX = Math.floor(col * cellWidth) + weightHalf;
+      ctx.moveTo(newX, 0);
+      ctx.lineTo(newX, opts.height);
+    }
+
+    for (let row = 0; row <= opts.rows; row++) {
+      let newY = row * cellHeight + weightHalf;
+      ctx.moveTo(0, newY);
+      ctx.lineTo(opts.width, newY);
+    }
+
+    // draw grid borders
+    ctx.stroke();
+
+    // center-align all drawn text @see https://stackoverflow.com/questions/24565458/centering-text-inside-a-canvas-rectangle-button
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+
+    // draw grid value text
+    for (let row = 0; row < opts.rows; row++) {
+      const startY = Math.floor(row * cellHeight) + weightHalf;
+      const idxY = startY + cellHeight / 5;
+      const valueY = startY + cellHeight / 2 + 2;
+      for (let col = 0; col < opts.cols; col++) {
+        const startX = col * cellWidth + weightHalf;
+        const idxX = startX + cellWidth / 5;
+        const valueX = startX + cellWidth / 2;
+        // row style storage
+        const idx = row * opts.rows + col;
+        const value = opts.values[idx];
+        if (value == null) {
+          console.error("UNEXPECTED MISSING TEXT VALUE AT: ", idx);
+          return;
+        }
+        ctx.fillStyle = "#bbb";
+        ctx.font = "9px Menlo";
+        ctx.fillText((idx + 1).toString(), idxX, idxY);
+
+        ctx.fillStyle = "#fff";
+        ctx.font = "16px Menlo";
+        ctx.fillText(value.toString(), valueX, valueY);
+      }
+    }
+  };
+
+  // Loads and initializes the requested WASM file
+  WebAssembly.instantiateStreaming(
+    fetch("/bin/zudoku.wasm"),
+    importObject,
+  ).then((res) => {
+    const wasmMemoryArray = new Uint8Array(memory.buffer);
+    const exports = res.instance.exports as {
+      getBoardBufferPtr: () => number;
+      getBoardSize: () => number;
+      colorBoard: () => void;
+    };
+
+    const boardSize = exports.getBoardSize();
+    const canvas: HTMLCanvasElement = document.getElementById(
+      "board",
+    ) as HTMLCanvasElement;
+
+    const values = new Array(9 * 9)
+      .fill(0)
+      .map((_) => getInclusiveRandBetween(1, 9));
+    drawGrid("board", {
+      cols: 9,
+      rows: 9,
+      width: 480,
+      height: 480,
+      weight: 1,
+      values,
+    });
+
+    canvas.addEventListener("click", (e) => {
+      const rows = 9;
+      const cols = 9;
+      const width = canvas.getBoundingClientRect().width;
+      const height = canvas.getBoundingClientRect().height;
+      const weight = 1;
+
+      let availWidth = width - weight;
+      let availHeight = height - weight;
+      let cellWidth = availWidth / cols;
+      let cellHeight = availHeight / rows;
+
+      const idxY = Math.floor(e.offsetY / cellHeight);
+      const idxX = Math.floor(e.offsetX / cellWidth);
+
+      const idx = idxY * cols + idxX;
+
+      console.log(`value at cell ${idx + 1}: ${values[idx]}`);
+    });
+
+    // const context = canvas.getContext("2d");
+    // if (!context) {
+    //   console.error("no context found: ", context);
+    //   return;
+    // }
+    // const imageData = context.createImageData(canvas.width, canvas.height);
+    // context.clearRect(0, 0, canvas.width, canvas.height);
+    //
+    // function drawBoard() {
+    //   if (!context) {
+    //     console.error("no context found: ", context);
+    //     return;
+    //   }
+    //   exports.colorBoard();
+    //   const bufferOffset = exports.getBoardBufferPtr();
+    //   const imageDataArray = wasmMemoryArray.slice(
+    //     bufferOffset,
+    //     bufferOffset + boardSize * boardSize,
+    //   );
+    //   imageData.data.set(imageDataArray);
+    //   context.clearRect(0, 0, canvas.width, canvas.height);
+    //   context.putImageData(imageData, 0, 0);
+    // }
+    //
+    // drawBoard();
+    console.log({ memoryBuffer: memory.buffer });
+    // setInterval(drawBoard, 200);
+  });
+</script>
